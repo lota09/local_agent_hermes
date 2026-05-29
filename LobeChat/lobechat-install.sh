@@ -153,12 +153,7 @@ except: pass
     read -rp "기본 모델명 입력 (예: Gemma-4-E4B-Uncensored-HauhauCS-Aggressive): " MODEL_NAME
     MODEL_NAME="${MODEL_NAME:-default}"
 
-    echo
-    info "웹 UI 접근 비밀번호 설정 (외부 노출 시 권장)"
-    read -rp "접근 코드(비밀번호) 입력 (없으면 Enter): " ACCESS_CODE
-
-    # Docker는 host.docker.internal로 호스트에 접근
-    # localhost → host.docker.internal 자동 변환
+    # Docker 컨테이너 내부에서 호스트 접근: localhost → host.docker.internal
     DOCKER_LLM_URL="${API_BASE_URL//localhost/host.docker.internal}"
 
     mkdir -p "$LOBECHAT_HOME"
@@ -170,21 +165,18 @@ except: pass
 LOBECHAT_PORT=${LOBECHAT_PORT}
 
 # ── LLM 백엔드 ──────────────────────────────────────
-# Docker 컨테이너 내부에서 호스트 접근: host.docker.internal
+# Docker 컨테이너 → 호스트 접근은 host.docker.internal 사용
 OPENAI_API_KEY=${API_KEY}
 OPENAI_PROXY_URL=${DOCKER_LLM_URL}
 CUSTOM_MODELS=${MODEL_NAME}
 DEFAULT_MODEL=${MODEL_NAME}
-
-# ── 보안 ────────────────────────────────────────────
-ACCESS_CODE=${ACCESS_CODE}
 
 # ── 기능 플래그 ─────────────────────────────────────
 FEATURE_FLAGS="-dalle"
 EOF
 
     ok "LLM 설정 완료: ${MODEL_NAME} @ ${API_BASE_URL}"
-    info "Docker용 URL 변환: ${API_BASE_URL} → ${DOCKER_LLM_URL}"
+    info "Docker용 URL: ${DOCKER_LLM_URL}"
     info "설정 파일: $LOBECHAT_ENV"
 }
 
@@ -326,30 +318,7 @@ EOF
     fi
 }
 
-# ── 6. Caddy 설정 안내 ─────────────────────────────────────────────────────
-print_caddy_hint() {
-    step "Caddy 리버스프록시 설정 안내"
-
-    echo
-    echo "  외부에서 안전하게 접속하려면 Caddyfile에 아래 블록을 추가하세요:"
-    echo
-    echo -e "${BOLD}  ── 추가할 Caddyfile 블록 ───────────────────────────────${NC}"
-    echo
-    cat <<CADDY
-  your-domain.com:포트번호 {
-      basicauth {
-          아이디 \$해시값   # caddy hash-password 로 생성
-      }
-      reverse_proxy localhost:${LOBECHAT_PORT}
-      tls internal
-  }
-CADDY
-    echo
-    info "적용: caddy reload --config ~/.caddy/Caddyfile"
-    info "포트 ${LOBECHAT_PORT} 외부 직접접근 차단: sudo ufw deny ${LOBECHAT_PORT}"
-}
-
-# ── 7. 완료 요약 ───────────────────────────────────────────────────────────
+# ── 6. 완료 요약 ───────────────────────────────────────────────────────────
 print_summary() {
     LOCAL_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'YOUR_SERVER_IP')"
 
@@ -390,7 +359,6 @@ main() {
     configure_llm
     configure_mcp
     install_service
-    print_caddy_hint
     print_summary
 }
 

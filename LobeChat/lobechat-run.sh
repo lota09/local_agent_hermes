@@ -33,10 +33,12 @@ DEFAULT_MODEL="default"
 source "$LOBECHAT_ENV"
 
 # LLM 서버 응답 확인 헬퍼
+# .env의 OPENAI_PROXY_URL은 Docker용(host.docker.internal) → 호스트에서 테스트 시 localhost로 변환
 check_llm_server() {
+    local test_url="${OPENAI_PROXY_URL//host.docker.internal/localhost}"
     curl -sf \
         ${OPENAI_API_KEY:+-H "Authorization: Bearer ${OPENAI_API_KEY}"} \
-        "${OPENAI_PROXY_URL}/models" \
+        "${test_url}/models" \
         &>/dev/null
 }
 
@@ -157,7 +159,8 @@ cmd_status() {
     fi
 
     echo
-    echo -e "${BOLD}── LLM 서버 상태 (${OPENAI_PROXY_URL}) ──────${NC}"
+    local llm_display="${OPENAI_PROXY_URL//host.docker.internal/localhost}"
+    echo -e "${BOLD}── LLM 서버 상태 (${llm_display}) ──────${NC}"
     if check_llm_server; then
         ok "LLM 서버 응답 확인"
         info "모델: ${DEFAULT_MODEL}"
