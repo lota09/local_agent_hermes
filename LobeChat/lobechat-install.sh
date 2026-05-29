@@ -123,8 +123,10 @@ configure_llm() {
     API_BASE_URL="${API_BASE_URL:-$DEFAULT_URL}"
     [[ -n "$API_BASE_URL" ]] || error "API Base URL을 입력해야 합니다."
 
-    read -rp "API Key [기본: '${DEFAULT_KEY}'] (로컬 서버는 빈칸도 가능): " API_KEY
+    read -rp "API Key [기본: '${DEFAULT_KEY}'] (로컬 서버는 아무 값이나 입력): " API_KEY
     API_KEY="${API_KEY:-$DEFAULT_KEY}"
+    # LobeChat은 빈 API 키를 거부함 → 로컬 서버용 placeholder 자동 설정
+    [[ -z "$API_KEY" ]] && API_KEY="local"
 
     # 연결 테스트
     echo

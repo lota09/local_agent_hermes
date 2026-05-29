@@ -66,6 +66,7 @@ cmd_start() {
         docker run -d \
             --name lobechat \
             -p "${LOBECHAT_PORT}:3210" \
+            --add-host=host.docker.internal:host-gateway \
             --env-file "$LOBECHAT_ENV" \
             --restart unless-stopped \
             lobehub/lobe-chat:latest \
