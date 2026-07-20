@@ -19,6 +19,15 @@ skip()  { echo -e "  ${YELLOW}건너뜀:${NC} $*"; }
 HAS_SUDO=false
 sudo -n true 2>/dev/null && HAS_SUDO=true
 
+# systemd가 실제 init(PID 1)으로 동작 중인지 확인 (chroot 등 최소 환경 대비)
+HAS_SYSTEMD=false
+[[ -d /run/systemd/system ]] && command -v systemctl &>/dev/null && HAS_SYSTEMD=true
+
+HAS_SYSTEMD_USER=false
+if [[ "$HAS_SYSTEMD" == true ]] && systemctl --user daemon-reload &>/dev/null 2>&1; then
+    HAS_SYSTEMD_USER=true
+fi
+
 ANYTHINGLLM_HOME="$HOME/.anythingllm"
 CONTAINER_NAME="anythingllm"
 IMAGE="mintplexlabs/anythingllm:latest"
@@ -27,6 +36,12 @@ IMAGE="mintplexlabs/anythingllm:latest"
 remove_user_service() {
     local svc="$1"
     local svc_file="$HOME/.config/systemd/user/${svc}.service"
+
+    if [[ "$HAS_SYSTEMD_USER" != true ]]; then
+        skip "systemd 사용자 세션 없음 — 서비스 제거 건너뜀: $svc"
+        [[ -f "$svc_file" ]] && remove_path "$svc_file"
+        return
+    fi
 
     if systemctl --user is-active "$svc" &>/dev/null 2>&1; then
         info "사용자 서비스 정지 중: $svc"
@@ -53,6 +68,11 @@ remove_user_service() {
 remove_system_service() {
     local svc="$1"
     local svc_file="/etc/systemd/system/${svc}.service"
+
+    if [[ "$HAS_SYSTEMD" == false ]]; then
+        skip "systemd 없음 — 시스템 서비스 제거 건너뜀: $svc"
+        return
+    fi
 
     if [[ "$HAS_SUDO" == false ]]; then
         skip "시스템 서비스 제거 건너뜀 (sudo 없음): $svc"
@@ -147,6 +167,7 @@ main() {
     echo
     [[ "$HAS_SUDO" == true ]] && info "sudo 권한 확인됨 — 시스템 서비스도 제거합니다" \
                                || warn "sudo 없음 — 사용자 서비스만 제거합니다"
+    [[ "$HAS_SYSTEMD" == true ]] || warn "systemd 없음 (chroot 등 최소 환경) — 서비스 제거 단계는 건너뜁니다"
     echo
 
     warn "AnythingLLM을 제거합니다."

@@ -28,9 +28,77 @@ IMAGE="mintplexlabs/anythingllm:latest"
 
 FS_HOST_PATH=""   # File System Agent에 노출할 호스트 경로 (비우면 비활성)
 
+# ── 환경 감지: sudo / systemd (chroot 등 최소 환경 대비) ──────────────────
+HAS_SUDO=false
+sudo -n true 2>/dev/null && HAS_SUDO=true
+
+# systemd가 실제 init(PID 1)으로 동작 중인지 확인 (systemctl 바이너리만 있고
+# 실제로는 안 쓰는 chroot/컨테이너와 구분하기 위해 /run/systemd/system도 확인)
+HAS_SYSTEMD=false
+[[ -d /run/systemd/system ]] && command -v systemctl &>/dev/null && HAS_SYSTEMD=true
+
+# systemd --user 세션 자체가 동작하는지 (systemd는 있어도 유저 세션/dbus가
+# 없는 최소 환경이 있을 수 있어 실제 호출로 확인)
+HAS_SYSTEMD_USER=false
+if [[ "$HAS_SYSTEMD" == true ]] && systemctl --user daemon-reload &>/dev/null 2>&1; then
+    HAS_SYSTEMD_USER=true
+fi
+
+_APT_UPDATED=false
+_apt_update_once() {
+    [[ "$_APT_UPDATED" == true ]] && return 0
+    info "apt 패키지 목록 갱신 중..."
+    if sudo apt-get update -qq 2>/dev/null; then
+        _APT_UPDATED=true
+    else
+        warn "apt update 실패 — 문제 있는 저장소를 비활성화하고 재시도합니다"
+        sudo find /etc/apt/sources.list.d/ -name "*.list" \
+            -exec bash -c 'sudo apt-get update 2>&1 | grep -q "$(basename "$1" .list)" && sudo mv "$1" "$1.disabled"' _ {} \; 2>/dev/null || true
+        sudo apt-get update -qq 2>/dev/null && _APT_UPDATED=true
+    fi
+}
+
+# 명령어가 없으면 apt로 자동 설치 — curl/wget/python3/openssl처럼
+# 최소 chroot 환경엔 아예 없을 수 있는 기본 도구들을 대비
+ensure_cmd() {
+    local cmd="$1" pkg="${2:-$1}"
+    command -v "$cmd" &>/dev/null && return 0
+
+    info "${cmd} 없음 — 설치를 시도합니다..."
+
+    if ! command -v apt-get &>/dev/null; then
+        error "${cmd}이(가) 없고 apt-get도 사용할 수 없는 환경입니다.
+  이 환경의 패키지 매니저로 직접 설치해주세요: ${pkg}"
+    fi
+
+    if [[ "$HAS_SUDO" != true ]]; then
+        error "${cmd}이(가) 없고 sudo 권한도 없습니다.
+  관리자에게 요청: sudo apt install -y ${pkg}"
+    fi
+
+    _apt_update_once
+    sudo apt-get install -y -qq "$pkg" \
+        || error "${pkg} 설치 실패. 관리자에게 'sudo apt install -y ${pkg}' 요청하세요."
+
+    command -v "$cmd" &>/dev/null || error "${cmd} 설치 후에도 PATH에서 찾을 수 없습니다."
+    ok "${cmd} 설치 완료"
+}
+
 # ── 1. 사전 조건 확인 ──────────────────────────────────────────────────────
 check_prerequisites() {
     step "사전 조건 확인"
+
+    # 기본 도구 자동 설치 (curl은 docker 설치 스크립트 실행에도 필요)
+    ensure_cmd curl curl
+    ensure_cmd wget wget
+    ensure_cmd python3 python3
+    ensure_cmd openssl openssl
+
+    if [[ "$HAS_SYSTEMD" == true ]]; then
+        ok "systemd 감지됨"
+    else
+        warn "systemd 없음 (chroot 등 최소 환경) — 자동 시작은 Docker 자체 재시작 정책으로 대체합니다"
+    fi
 
     # ── Docker 확인 ────────────────────────────────────────────────────────
     if ! command -v docker &>/dev/null; then
@@ -43,21 +111,34 @@ check_prerequisites() {
     sudo usermod -aG docker ${USER}"
         fi
 
-        info "apt 저장소 정리 중..."
-        sudo apt-get update -qq 2>/dev/null || {
-            warn "apt update 실패 — 문제 있는 저장소를 비활성화합니다"
-            sudo find /etc/apt/sources.list.d/ -name "*.list" \
-                -exec bash -c 'sudo apt-get update 2>&1 | grep -q "$(basename "$1" .list)" && sudo mv "$1" "$1.disabled"' _ {} \; 2>/dev/null || true
-        }
+        _apt_update_once
 
         curl -fsSL https://get.docker.com | sudo sh \
             || error "Docker 설치 실패. 위 오류를 확인하세요."
-        sudo systemctl enable --now docker
+
+        if [[ "$HAS_SYSTEMD" == true ]]; then
+            sudo systemctl enable --now docker
+        elif command -v service &>/dev/null; then
+            info "systemd 없음 — service 명령으로 Docker 데몬 시작을 시도합니다"
+            sudo service docker start 2>/dev/null || true
+        else
+            warn "init 시스템을 찾을 수 없어 Docker 데몬을 자동으로 시작할 수 없습니다."
+            warn "chroot 환경이라면 호스트의 Docker 소켓을 공유해서 쓰는 방식인지 확인하세요"
+            warn "  (예: -v /var/run/docker.sock:/var/run/docker.sock)"
+        fi
         info "Docker 설치 완료"
     fi
 
-    # ── Docker 권한 확인 ───────────────────────────────────────────────────
+    # ── Docker 권한/연결 확인 ──────────────────────────────────────────────
     if ! docker info &>/dev/null 2>&1; then
+        if groups "$USER" 2>/dev/null | grep -qw docker; then
+            # 그룹 권한은 정상인데도 실패 → 데몬 자체에 연결 불가 (chroot 등)
+            error "Docker 데몬에 연결할 수 없습니다 (docker 그룹 권한은 정상).
+  chroot 환경이라면 호스트의 Docker 소켓이 공유되어 있는지 확인하세요:
+    -v /var/run/docker.sock:/var/run/docker.sock
+  또는 이 환경 안에서 Docker 데몬(dockerd)이 실제로 떠 있는지 확인하세요."
+        fi
+
         warn "현재 사용자(${USER})가 docker 그룹에 없습니다."
 
         if sudo -n true 2>/dev/null; then
@@ -78,10 +159,6 @@ check_prerequisites() {
     fi
 
     ok "Docker $(docker --version | awk '{print $3}' | tr -d ',')"
-
-    command -v curl    &>/dev/null || error "curl 없음. 관리자에게 'sudo apt install curl' 요청하세요."
-    command -v python3 &>/dev/null || error "python3 없음. 관리자에게 'sudo apt install python3' 요청하세요."
-    command -v openssl &>/dev/null || error "openssl 없음. 관리자에게 'sudo apt install openssl' 요청하세요."
     ok "사전 조건 확인 완료"
 }
 
@@ -331,6 +408,12 @@ start_anythingllm() {
     FS_ARGS=""
     [[ -n "$FS_HOST_PATH" ]] && FS_ARGS="-v ${FS_HOST_PATH}:/app/server/storage/anythingllm-fs"
 
+    # systemd 사용자 서비스가 없으면 이 컨테이너 자체가 유일한 지속 실행
+    # 수단이므로 Docker 자체 재시작 정책을 건다. systemd가 관리하는 경우엔
+    # install_service()가 --rm 기반으로 컨테이너를 다시 띄우므로 비워둔다.
+    RESTART_ARGS=""
+    [[ "$HAS_SYSTEMD_USER" != true ]] && RESTART_ARGS="--restart unless-stopped"
+
     info "컨테이너 시작 중..."
     # shellcheck disable=SC2086
     docker run -d \
@@ -341,6 +424,7 @@ start_anythingllm() {
         -v "${STORAGE_LOCATION}:/app/server/storage" \
         -v "${ENV_FILE}:/app/server/.env" \
         $FS_ARGS \
+        $RESTART_ARGS \
         "$IMAGE" \
         > /dev/null
 
@@ -361,9 +445,17 @@ start_anythingllm() {
     fi
 }
 
-# ── 8. systemd 사용자 서비스 등록 ─────────────────────────────────────────
+# ── 8. 자동 시작 설정 (systemd 있으면 유저 서비스, 없으면 Docker 재시작 정책) ──
 install_service() {
-    step "systemd 사용자 서비스 등록"
+    step "자동 시작 설정"
+
+    if [[ "$HAS_SYSTEMD_USER" != true ]]; then
+        warn "systemd 사용자 세션을 사용할 수 없습니다 (chroot 등 최소 환경) — 서비스 등록을 건너뜁니다"
+        info "대신 컨테이너를 Docker 자체 재시작 정책(--restart unless-stopped)으로 띄웠습니다"
+        info "Docker 데몬이 살아있는 한 컨테이너는 다운되어도 자동으로 재시작됩니다"
+        info "환경을 새로 진입(재부팅/새 chroot 세션)했을 때는 직접 실행하세요: ./run_AnythingLLM.sh start"
+        return 0
+    fi
 
     mkdir -p "$HOME/.config/systemd/user"
     SERVICE_FILE="$HOME/.config/systemd/user/anythingllm.service"
@@ -394,7 +486,9 @@ EOF
     systemctl --user enable anythingllm
     ok "anythingllm systemd 서비스 등록 완료 (부팅 시 자동 시작)"
 
-    if sudo -n loginctl enable-linger "$USER" 2>/dev/null; then
+    if ! command -v loginctl &>/dev/null; then
+        warn "loginctl 없음 — linger 설정 건너뜀"
+    elif sudo -n loginctl enable-linger "$USER" 2>/dev/null; then
         ok "loginctl linger 활성화 → 로그아웃 후에도 서비스 유지"
     else
         warn "linger 미활성화 (sudo 필요)"
@@ -417,6 +511,13 @@ print_summary() {
     echo "  외부 접속:    http://${LOCAL_IP}:${ANYTHINGLLM_PORT}"
     echo
     echo -e "  ${YELLOW}※ 첫 접속 시 관리자 계정을 생성하게 됩니다.${NC}"
+    echo
+    if [[ "$HAS_SYSTEMD_USER" == true ]]; then
+        echo "  자동 시작: systemd 사용자 서비스 등록됨 (재부팅 시 자동 시작)"
+    else
+        echo "  자동 시작: systemd 없음 → Docker 재시작 정책(--restart unless-stopped)으로 대체"
+        echo "            새 세션/재부팅 후에는 ./run_AnythingLLM.sh start 로 다시 실행하세요"
+    fi
     echo
     echo "  ─ 서비스 관리 ──────────────────────────────────────"
     echo "  ./run_AnythingLLM.sh start    # 시작"
