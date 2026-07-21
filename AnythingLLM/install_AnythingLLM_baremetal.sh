@@ -18,6 +18,21 @@ warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 error() { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
 step()  { echo; echo -e "${BOLD}▶ $*${NC}"; echo "──────────────────────────────────"; }
 
+# 이 스크립트를 절대 sudo로 감싸서 실행하지 않도록 막는다.
+# sudo로 실행하면 $HOME이 실행 계정(n20u 등)이 아니라 root의 홈으로 바뀌어서
+# 설치 위치가 /root/anythingllm 로 조용히 바뀌는 사고가 난다 (실제로 겪었던 문제).
+# 이 스크립트는 항상 일반 사용자로 실행하고, root 권한이 필요한 개별 명령만
+# 내부에서 알아서 sudo를 사용한다.
+if [[ $EUID -eq 0 && -n "${SUDO_USER:-}" ]]; then
+    echo -e "${RED}[ERROR]${NC} 이 스크립트는 sudo로 실행하지 마세요."
+    echo "  sudo ./install_AnythingLLM_baremetal.sh 처럼 실행하면 \$HOME이 /root로 바뀌어서"
+    echo "  설치가 엉뚱하게 /root 밑에 들어갑니다."
+    echo
+    echo "  일반 사용자로 다시 실행하세요 (root 권한이 필요하면 스크립트가 알아서 물어봅니다):"
+    echo "    ./install_AnythingLLM_baremetal.sh"
+    exit 1
+fi
+
 ANYTHINGLLM_DIR="$HOME/anythingllm"
 STORAGE_DIR="$ANYTHINGLLM_DIR/server/storage"
 ENV_FILE="$ANYTHINGLLM_DIR/server/.env"
@@ -31,8 +46,34 @@ MIN_NODE_MAJOR=18
 FS_HOST_PATH=""   # File System Agent에 노출할 호스트 경로 (비우면 비활성)
 
 # ── 환경 감지: sudo / systemd (chroot·proot 등 최소 환경 대비) ────────────
+# 그냥 계정이 root인지(EUID 0)만으로도 충분하고, 아니라면 sudo "권한이 있는지"를
+# 확인한다. 이때 -n(비대화형)만 쓰면 "비밀번호 없이 즉시 되는 경우"만 잡혀서
+# 비밀번호가 필요한 일반적인 sudo 계정은 전부 "sudo 없음"으로 오판하게 된다
+# (curl 자동설치가 계속 실패했던 원인). 그래서 -n이 실패하면 대화형 sudo -v로
+# 한 번 더 확인하고, 이후엔 백그라운드에서 타임스탬프를 갱신해 설치 도중
+# 비밀번호를 여러 번 묻지 않게 한다.
 HAS_SUDO=false
-sudo -n true 2>/dev/null && HAS_SUDO=true
+_SUDO_KEEPALIVE_PID=""
+
+_stop_sudo_keepalive() {
+    [[ -n "$_SUDO_KEEPALIVE_PID" ]] && kill "$_SUDO_KEEPALIVE_PID" 2>/dev/null || true
+}
+trap _stop_sudo_keepalive EXIT
+
+if [[ $EUID -eq 0 ]]; then
+    HAS_SUDO=true
+elif command -v sudo &>/dev/null; then
+    if sudo -n true 2>/dev/null; then
+        HAS_SUDO=true
+    else
+        info "일부 설치 단계에 관리자 권한이 필요합니다. sudo 비밀번호를 입력해주세요."
+        if sudo -v 2>/dev/null; then
+            HAS_SUDO=true
+            ( while true; do sleep 60; sudo -n true 2>/dev/null || exit; done ) &
+            _SUDO_KEEPALIVE_PID=$!
+        fi
+    fi
+fi
 
 HAS_SYSTEMD=false
 [[ -d /run/systemd/system ]] && command -v systemctl &>/dev/null && HAS_SYSTEMD=true

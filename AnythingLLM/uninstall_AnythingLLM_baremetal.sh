@@ -16,8 +16,27 @@ error() { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
 step()  { echo; echo -e "${BOLD}▶ $*${NC}"; echo "──────────────────────────────────"; }
 skip()  { echo -e "  ${YELLOW}건너뜀:${NC} $*"; }
 
+# sudo로 감싸서 실행하면 $HOME이 바뀌어 엉뚱한(/root) 디렉터리를 대상으로
+# rm -rf를 계산하게 되므로, 애초에 sudo로는 실행하지 못하게 막는다.
+if [[ $EUID -eq 0 && -n "${SUDO_USER:-}" ]]; then
+    echo -e "${RED}[ERROR]${NC} 이 스크립트는 sudo로 실행하지 마세요."
+    echo "  sudo로 실행하면 \$HOME이 /root로 바뀌어서 제거 대상 경로가 달라집니다."
+    echo "  일반 사용자로 다시 실행하세요: ./uninstall_AnythingLLM_baremetal.sh"
+    exit 1
+fi
+
+# -n(비대화형)만 쓰면 비밀번호가 필요한 일반 sudo 계정을 전부 "sudo 없음"으로
+# 오판하므로, 실패하면 대화형 sudo -v로 한 번 더 확인한다.
 HAS_SUDO=false
-sudo -n true 2>/dev/null && HAS_SUDO=true
+if [[ $EUID -eq 0 ]]; then
+    HAS_SUDO=true
+elif command -v sudo &>/dev/null; then
+    if sudo -n true 2>/dev/null; then
+        HAS_SUDO=true
+    elif sudo -v 2>/dev/null; then
+        HAS_SUDO=true
+    fi
+fi
 
 HAS_SYSTEMD=false
 [[ -d /run/systemd/system ]] && command -v systemctl &>/dev/null && HAS_SYSTEMD=true
