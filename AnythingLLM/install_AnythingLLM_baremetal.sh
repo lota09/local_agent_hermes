@@ -154,14 +154,32 @@ ensure_node() {
     ok "Node.js $(node -v) 설치 완료"
 }
 
+# npm install -g는 NodeSource로 설치한 Node처럼 전역 모듈 경로
+# (/usr/lib/node_modules 등)가 root 소유인 경우 EACCES로 실패한다.
+# 에러를 숨기지 않고 보여주되, sudo가 가능하면 자동으로 재시도한다.
+_npm_install_global() {
+    local pkg="$1"
+    if npm install -g "$pkg"; then
+        return 0
+    fi
+
+    if [[ "$HAS_SUDO" == true ]]; then
+        warn "일반 권한으로 설치 실패 (전역 npm 디렉터리가 root 소유일 가능성) — sudo로 재시도합니다"
+        sudo npm install -g "$pkg" && return 0
+    fi
+
+    return 1
+}
+
 ensure_yarn() {
     if command -v yarn &>/dev/null; then
         ok "yarn $(yarn --version)"
         return 0
     fi
     info "yarn 없음 — npm으로 설치합니다..."
-    npm install -g yarn &>/dev/null || error "yarn 설치 실패 (npm install -g yarn)"
-    command -v yarn &>/dev/null || error "yarn 설치 후에도 찾을 수 없습니다."
+    _npm_install_global yarn || error "yarn 설치 실패 (npm install -g yarn)"
+    command -v yarn &>/dev/null || error "yarn 설치 후에도 PATH에서 찾을 수 없습니다.
+  npm 전역 bin 경로를 확인하세요: npm config get prefix"
     ok "yarn $(yarn --version) 설치 완료"
 }
 
@@ -171,8 +189,9 @@ ensure_pm2() {
         return 0
     fi
     info "pm2 없음 — npm으로 설치합니다..."
-    npm install -g pm2 &>/dev/null || error "pm2 설치 실패 (npm install -g pm2)"
-    command -v pm2 &>/dev/null || error "pm2 설치 후에도 찾을 수 없습니다."
+    _npm_install_global pm2 || error "pm2 설치 실패 (npm install -g pm2)"
+    command -v pm2 &>/dev/null || error "pm2 설치 후에도 PATH에서 찾을 수 없습니다.
+  npm 전역 bin 경로를 확인하세요: npm config get prefix"
     ok "pm2 설치 완료"
 }
 
