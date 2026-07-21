@@ -328,6 +328,15 @@ configure_mcp() {
     read -rp "Brave Search API 키 (없으면 Enter): " BRAVE_KEY
     echo
 
+    echo "  ─ 터미널(셸) 도구 ───────────────────────────────────────"
+    echo "  Desktop Commander: LLM이 bash 명령을 실행하고 파일을 편집할 수 있게 합니다."
+    echo -e "  ${YELLOW}※ 사실상 셸 전체 접근 권한을 주는 셈이라 위험할 수 있습니다.${NC}"
+    echo "     (컨테이너 내부 셸에서 실행됩니다)"
+    echo
+    read -rp "Desktop Commander(터미널 도구)를 추가하시겠습니까? [y/N]: " ENABLE_TERM
+    ENABLE_TERM="${ENABLE_TERM,,}"
+    echo
+
     info "MCP 설정 파일 생성 중: $MCP_CONFIG"
     mkdir -p "$MCP_DIR"
 
@@ -337,8 +346,16 @@ import json, os
 fs_path = "${FS_HOST_PATH}"
 tavily_key = "${TAVILY_KEY}"
 brave_key = "${BRAVE_KEY}"
+enable_term = "${ENABLE_TERM}" == "y"
 
 config = {"mcpServers": {}}
+
+if enable_term:
+    config["mcpServers"]["desktop-commander"] = {
+        "command": "npx",
+        "args": ["-y", "@wonderwhy-er/desktop-commander@latest"],
+        "description": "터미널 명령 실행 + 파일 편집"
+    }
 
 if fs_path:
     config["mcpServers"]["filesystem"] = {
