@@ -1,0 +1,11 @@
+# Open Terminal — agent_tools 매니페스트
+TOOL_NAME="open-terminal"
+TOOL_TITLE="Open Terminal"
+TOOL_DESC="LLM 에게 주는 셸 — 격리 주체를 골라 설치 (sandbox/agent/self/docker)"
+TOOL_TAGS="terminal exec danger"
+TOOL_INSTALL="./open-terminal-install.sh"
+TOOL_RUN="./open-terminal-run.sh"
+TOOL_STATUS="./open-terminal-run.sh status"
+TOOL_PORT="8022"
+TOOL_HEALTH="http://127.0.0.1:8022/health"
+TOOL_DOCS="https://github.com/open-webui/open-terminal"

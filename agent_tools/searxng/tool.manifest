@@ -1,0 +1,12 @@
+# SearXNG — agent_tools 매니페스트
+# install.sh 가 이 파일을 발견해서 목록에 올린다. install.sh 는 수정하지 않는다.
+TOOL_NAME="searxng"
+TOOL_TITLE="SearXNG"
+TOOL_DESC="로컬 메타서치 엔진 — Open WebUI 웹 검색 백엔드 (API 키·쿼터 없음)"
+TOOL_TAGS="search web"
+TOOL_INSTALL="./searxng-install.sh"
+TOOL_RUN="./searxng-run.sh"
+TOOL_STATUS="./searxng-run.sh status"
+TOOL_PORT="8888"
+TOOL_HEALTH="http://127.0.0.1:8888/"
+TOOL_DOCS="https://docs.searxng.org/"
